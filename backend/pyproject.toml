@@ -17,6 +17,7 @@ dependencies = [
     "pycopg>=1.2.0",
     "pydantic-settings>=2.15.0",
     "python-jose[cryptography]>=3.5.0",
+    "python-multipart>=0.0.32",
     "sqlalchemy>=2.0.54",
     "uvicorn>=0.53.0",
 ]

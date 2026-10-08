@@ -1,5 +1,7 @@
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from fastapi import UploadFile
+from googleapiclient.http import MediaIoBaseUpload
 
 from app.core.config import settings
 
@@ -128,4 +130,57 @@ class GoogleDriveService:
         }
 
 
+    def create_event_folder(
+        self,
+        user,
+        event_name: str
+    ):
+        """Create an event folder inside the user's FrameFind/Events folder."""
+        drive = self.get_drive_service(user)
+
+        events_folder = self.find_folder(
+            drive=drive,
+            name="Events",
+            parent_id=user.framefind_folder_id,
+        )
+
+        if not events_folder:
+            raise ValueError("Events folder not found")
+
+        return self.create_folder(
+            drive=drive,
+            name=event_name,
+            parent_id=events_folder["id"],
+        )
+
+
+    def upload_photo(
+        self,
+        user,
+        file: UploadFile,
+        parent_folder_id: str,
+    ):
+        """Upload an event photo to a Google Drive folder."""
+        
+        drive = self.get_drive_service(user)
+
+        file_metadata = {
+            "name": file.filename,
+            "parents": [parent_folder_id],
+        }
+
+        media = MediaIoBaseUpload(
+            file.file,
+            mimetype=file.content_type,
+            resumable=True,
+        )
+
+        return drive.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id, name, mimeType, parents",
+        ).execute()
+
 google_drive_service = GoogleDriveService()
+
+

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
 
-
+    
 class FaceEmbedding(Base):
     __tablename__ = "face_embeddings"
 
@@ -24,9 +24,8 @@ class FaceEmbedding(Base):
         nullable=False,
     )
 
-    # Dimension will be decided after choosing the face embedding model.
     embedding: Mapped[list[float]] = mapped_column(
-        Vector(),
+        Vector(512),
         nullable=False,
     )
 

@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
+    FRONTEND_URL: str
+    BACKEND_URL: str
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",
