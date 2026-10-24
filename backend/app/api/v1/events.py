@@ -189,6 +189,34 @@ def get_event_photos(
 
     return photos
 
+
+@router.post("/{event_id}/scan")
+def photo_scan(
+    event_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    event = event_service.get_user_event(
+            db=db,
+            event_id=event_id,
+            user_id=current_user.id,
+        )
+    
+    if event is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found",
+        )
+
+    if event.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="Only the event owner can scan",
+        )
+    
+
+
 @router.delete("/{event_id}",)
 def delete_event():
     pass
+

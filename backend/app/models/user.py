@@ -79,7 +79,3 @@ class User(Base):
     memberships: Mapped[list["EventMembership"]] = relationship(
         back_populates="user",
     )
-
-    saved_photos: Mapped[list["SavedPhoto"]] = relationship(
-        back_populates="user",
-    )

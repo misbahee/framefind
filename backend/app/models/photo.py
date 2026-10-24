@@ -66,6 +66,3 @@ class Photo(Base):
         back_populates="photo",
     )
 
-    saved_photos: Mapped[list["SavedPhoto"]] = relationship(
-        back_populates="photo",
-    )
