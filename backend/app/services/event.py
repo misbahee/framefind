@@ -1,15 +1,16 @@
 import secrets
 from uuid import UUID
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Event, EventMembership
 
+
 class EventService:
 
-    def create_event(
+    async def create_event(
         self,
-        db: Session,
+        db: AsyncSession,
         owner_id,
         name: str,
         date,
@@ -29,14 +30,14 @@ class EventService:
         )
 
         db.add(event)
-        db.commit()
-        db.refresh(event)
+        await db.commit()
+        await db.refresh(event)
 
         return event
 
 
-    def get_user_events(self, db: Session, user_id):
-        """Finds all the event where the user is owner or member. """
+    async def get_user_events(self, db: AsyncSession, user_id):
+        """Finds all the events where the user is owner or member."""
 
         statement = (
             select(Event)
@@ -54,16 +55,17 @@ class EventService:
             .order_by(Event.created_at.desc())
         )
 
-        return db.scalars(statement).all()
+        result = await db.scalars(statement)
+        return result.all()
 
 
-    def get_user_event(
+    async def get_user_event(
         self,
-        db: Session,
+        db: AsyncSession,
         event_id: UUID,
         user_id: UUID,
     ):
-        """ Gives details about a specific event if the user is owner or the member. """
+        """Gives details about a specific event if the user is owner or member."""
 
         statement = (
             select(Event)
@@ -80,16 +82,16 @@ class EventService:
             )
         )
 
-        return db.scalar(statement)
+        return await db.scalar(statement)
 
 
-    def get_invitation_link(
+    async def get_invitation_link(
         self,
-        db: Session,
+        db: AsyncSession,
         event_id: UUID,
         user_id: UUID,
     ):
-        """ Return the invitation url of the event for the owner. """
+        """Return the invitation token of the event for the owner."""
 
         statement = (
             select(Event)
@@ -99,7 +101,7 @@ class EventService:
             )
         )
 
-        event = db.scalar(statement)
+        event = await db.scalar(statement)
 
         if event is None:
             return None
@@ -107,14 +109,14 @@ class EventService:
         return event.invitation_token
 
 
-    def get_invitation(
+    async def get_invitation(
         self,
-        db: Session,
+        db: AsyncSession,
         invitation_token: str,
         user_id,
     ):
-        """ Returns event details for the valid invitation token and the membership status. """
-        
+        """Returns event details for the valid invitation token and the membership status."""
+
         statement = (
             select(Event, EventMembership)
             .outerjoin(
@@ -125,7 +127,7 @@ class EventService:
             .where(Event.invitation_token == invitation_token)
         )
 
-        result = db.execute(statement).one_or_none()
+        result = (await db.execute(statement)).one_or_none()
 
         if result is None:
             return None
@@ -144,15 +146,15 @@ class EventService:
             ),
         }
 
-    def join_event(
+    async def join_event(
         self,
-        db: Session,
+        db: AsyncSession,
         event_id: UUID,
         user_id: UUID,
         invitation_token: str,
     ):
         # 1. Find the event
-        event = db.get(Event, event_id)
+        event = await db.get(Event, event_id)
 
         if event is None:
             return None, "event_not_found"
@@ -171,7 +173,7 @@ class EventService:
             EventMembership.user_id == user_id,
         )
 
-        membership = db.scalar(statement)
+        membership = await db.scalar(statement)
 
         if membership is not None:
             return event, "already_joined"
@@ -183,11 +185,10 @@ class EventService:
         )
 
         db.add(membership)
-        db.commit()
-        db.refresh(membership)
+        await db.commit()
+        await db.refresh(membership)
 
         return event, "joined"
-            
 
 
 event_service = EventService()

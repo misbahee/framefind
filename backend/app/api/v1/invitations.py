@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from app.core.config import settings
@@ -20,12 +20,12 @@ router = APIRouter(
     "/{invitation_token}",
     response_model=InvitationResponse,
 )
-def get_invitation(
+async def get_invitation(
     invitation_token: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    invitation = event_service.get_invitation(
+    invitation = await event_service.get_invitation(
         db=db,
         invitation_token=invitation_token,
         user_id=current_user.id,
@@ -44,12 +44,12 @@ def get_invitation(
     "/events/{event_id}/link",
     response_model=InvitationLinkResponse,
 )
-def get_invitation_link(
+async def get_invitation_link(
     event_id: UUID,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    invitation_token = event_service.get_invitation_link(
+    invitation_token = await event_service.get_invitation_link(
         db=db,
         event_id=event_id,
         user_id=current_user.id,

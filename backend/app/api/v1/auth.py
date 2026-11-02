@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Request , HTTPException, Depends ,Response , status
+from fastapi import APIRouter, Request, HTTPException, Depends, Response, status
 from fastapi.responses import RedirectResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import settings
 from app.dependencies.database import get_db
@@ -11,6 +12,7 @@ from app.dependencies.auth import get_current_user
 from app.models.user import User
 from app.schemas.user import UserResponse
 from app.services.google_drive import google_drive_service
+
 
 router = APIRouter(
     prefix="/auth",
@@ -28,7 +30,7 @@ def google_login():
     )
 
     response = RedirectResponse(url=authorization_url)
-
+    response.delete_cookie("oauth_state")   # clear any stale state first
     response.set_cookie(
         key="oauth_state",
         value=state,
@@ -41,18 +43,14 @@ def google_login():
 
     return response
 
-import time
 
 @router.get("/google/callback")
-def google_callback(
+async def google_callback(
     request: Request,
     code: str,
     state: str,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    callback_start = time.perf_counter()
-    print("\n========== GOOGLE CALLBACK START ==========")
-
     stored_state = request.cookies.get("oauth_state")
 
     if not stored_state or stored_state != state:
@@ -62,101 +60,46 @@ def google_callback(
         )
 
     try:
-        # 1. Exchange authorization code
-        start = time.perf_counter()
-
-        credentials = google_oauth_service.exchange_code(
+        # 1. Exchange authorization code (sync Google lib — run in threadpool)
+        credentials = await run_in_threadpool(
+            google_oauth_service.exchange_code,
             code=code,
             state=state,
         )
 
-        print(
-            f"exchange_code: "
-            f"{time.perf_counter() - start:.3f} seconds"
-        )
-
-        # 2. Get Google user information
-        start = time.perf_counter()
-
-        user_info = google_oauth_service.get_user_info(
-            credentials
-        )
-
-        print(
-            f"get_user_info: "
-            f"{time.perf_counter() - start:.3f} seconds"
+        # 2. Get Google user information (sync — threadpool)
+        user_info = await run_in_threadpool(
+            google_oauth_service.get_user_info,
+            credentials,
         )
 
         # 3. Get/create user in database
-        start = time.perf_counter()
-
-        user = user_service.get_or_create_google_user(
+        user = await user_service.get_or_create_google_user(
             db=db,
             user_info=user_info,
             credentials=credentials,
         )
 
-        print(
-            f"get_or_create_google_user: "
-            f"{time.perf_counter() - start:.3f} seconds"
-        )
-
-        # 4. Setup Google Drive
-        start = time.perf_counter()
-
-        folders = google_drive_service.setup_user_drive(user)
-
-        print(
-            f"setup_user_drive: "
-            f"{time.perf_counter() - start:.3f} seconds"
+        # 4. Setup Google Drive (sync — threadpool)
+        folders = await run_in_threadpool(
+            google_drive_service.setup_user_drive,
+            user,
         )
 
         user.framefind_folder_id = folders["framefind"]["id"]
 
-        # 5. Commit database
-        start = time.perf_counter()
+        # 5. Commit and refresh
+        await db.commit()
+        await db.refresh(user)
 
-        db.commit()
-
-        print(
-            f"db.commit: "
-            f"{time.perf_counter() - start:.3f} seconds"
-        )
-
-        # 6. Refresh database object
-        start = time.perf_counter()
-
-        db.refresh(user)
-
-        print(
-            f"db.refresh: "
-            f"{time.perf_counter() - start:.3f} seconds"
-        )
-
-        # 7. Create JWT
-        start = time.perf_counter()
-
-        access_token = create_access_token(
-            data={"sub": str(user.id)}
-        )
-
-        print(
-            f"create_access_token: "
-            f"{time.perf_counter() - start:.3f} seconds"
-        )
+        # 6. Create JWT
+        access_token = create_access_token(data={"sub": str(user.id)})
 
     except Exception as e:
         print(f"Google authentication error: {e}")
         raise
 
-    print(
-        f"TOTAL CALLBACK PROCESSING: "
-        f"{time.perf_counter() - callback_start:.3f} seconds"
-    )
-
-    response = RedirectResponse(
-        url=f"{settings.BACKEND_URL}/docs"
-    )
+    response = RedirectResponse(url=f"{settings.BACKEND_URL}/docs")
 
     response.set_cookie(
         key="access_token",
@@ -174,7 +117,7 @@ def google_callback(
 
 
 @router.get("/me", response_model=UserResponse)
-def get_me(
+async def get_me(
     current_user: User = Depends(get_current_user),
 ):
     return current_user
@@ -184,7 +127,7 @@ def get_me(
 def logout():
     response = Response(
         content="Logged out successfully",
-        status_code=status.HTTP_204_NO_CONTENT
+        status_code=status.HTTP_204_NO_CONTENT,
     )
 
     response.delete_cookie(

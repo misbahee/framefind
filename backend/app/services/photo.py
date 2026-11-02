@@ -1,20 +1,19 @@
-from sqlalchemy.orm import Session
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from app.models.photo import Photo
 from app.models.event import Event
 from app.models.event_membership import EventMembership
 
-from app.models.photo import Photo
-
 
 class PhotoService:
 
-    def create_photo(
+    async def create_photo(
         self,
-        db: Session,
-        event_id,
+        db: AsyncSession,
+        event_id: UUID,
         drive_file_id: str,
         filename: str,
         mime_type: str,
@@ -29,20 +28,20 @@ class PhotoService:
         )
 
         db.add(photo)
-        db.commit()
-        db.refresh(photo)
+        await db.commit()
+        await db.refresh(photo)
 
         return photo
 
 
-    def get_event_photos(
+    async def get_event_photos(
         self,
-        db: Session,
-        event_id,
-        user_id,
+        db: AsyncSession,
+        event_id: UUID,
+        user_id: UUID,
     ):
         """Return photos from an event if the user has access to it."""
-        
+
         access_statement = (
             select(Event.id)
             .outerjoin(
@@ -59,7 +58,7 @@ class PhotoService:
             )
         )
 
-        event = db.scalar(access_statement)
+        event = await db.scalar(access_statement)
 
         if event is None:
             return None
@@ -70,8 +69,31 @@ class PhotoService:
             .order_by(Photo.created_at.desc())
         )
 
-        return db.scalars(statement).all()
+        result = await db.scalars(statement)
+        return result.all()
 
+
+    async def claim_pending_photos(
+        self,
+        db: AsyncSession,
+        event_id: UUID,
+        batch_size: int = 100,
+    ):
+        """Finds photos with the \'PENDING\' status and returns it also locks that rows."""
+        
+        stmt = (
+            select(Photo)
+            .where(
+                Photo.event_id == event_id,
+                Photo.processing_status == "PENDING",
+            )
+            .limit(batch_size)
+            .with_for_update(skip_locked=True)
+        )
+
+        result = await db.execute(stmt)
+
+        return result.scalars().all()
 
 
 photo_service = PhotoService()

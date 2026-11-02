@@ -1,12 +1,9 @@
-from app.core.database import SessionLocal
+from collections.abc import AsyncGenerator
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import AsyncSessionLocal
 
-
-def get_db():
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """ Provide a database session for requests. """
-
-    db = SessionLocal()
-
-    try:
+    
+    async with AsyncSessionLocal() as db:
         yield db
-    finally:
-        db.close()

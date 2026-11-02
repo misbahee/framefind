@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, status, HTTPException, UploadFile, File
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 from uuid import UUID
 
 from app.dependencies.auth import get_current_user
@@ -11,6 +12,7 @@ from app.services.google_drive import google_drive_service
 from app.schemas.event_membership import EventJoinRequest
 from app.schemas.photo import PhotoResponse
 from app.services.photo import photo_service
+from app.tasks.photo_tasks import process_photos
 
 
 router = APIRouter(
@@ -24,17 +26,18 @@ router = APIRouter(
     response_model=EventResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def create_event(
+async def create_event(
     event_data: EventCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    event_folder = google_drive_service.create_event_folder(
+    event_folder = await run_in_threadpool(
+        google_drive_service.create_event_folder,
         user=current_user,
         event_name=event_data.name,
     )
 
-    event = event_service.create_event(
+    event = await event_service.create_event(
         db=db,
         owner_id=current_user.id,
         name=event_data.name,
@@ -48,11 +51,13 @@ def create_event(
 
 
 @router.get("", response_model=list[EventResponse])
-def list_event(current_user: User = Depends(get_current_user),
-               db: Session = Depends(get_db)):
-    return event_service.get_user_events(
-        db = db,
-        user_id= current_user.id,
+async def list_event(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await event_service.get_user_events(
+        db=db,
+        user_id=current_user.id,
     )
 
 
@@ -60,12 +65,12 @@ def list_event(current_user: User = Depends(get_current_user),
     "/{event_id}",
     response_model=EventResponse,
 )
-def get_event(
+async def get_event(
     event_id: UUID,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    event = event_service.get_user_event(
+    event = await event_service.get_user_event(
         db=db,
         event_id=event_id,
         user_id=current_user.id,
@@ -83,13 +88,13 @@ def get_event(
 @router.post(
     "/{event_id}/join",
 )
-def join_event(
+async def join_event(
     event_id: UUID,
     join_data: EventJoinRequest,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    event, result = event_service.join_event(
+    event, result = await event_service.join_event(
         db=db,
         event_id=event_id,
         user_id=current_user.id,
@@ -125,13 +130,13 @@ def join_event(
     response_model=PhotoResponse,
     status_code=status.HTTP_201_CREATED,
 )
-def upload_photo(
+async def upload_photo(
     event_id: UUID,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    event = event_service.get_user_event(
+    event = await event_service.get_user_event(
         db=db,
         event_id=event_id,
         user_id=current_user.id,
@@ -149,13 +154,14 @@ def upload_photo(
             detail="Only the event owner can upload photos",
         )
 
-    drive_file = google_drive_service.upload_photo(
+    drive_file = await run_in_threadpool(
+        google_drive_service.upload_photo,
         user=current_user,
         file=file,
         parent_folder_id=event.drive_folder_id,
     )
 
-    photo = photo_service.create_photo(
+    photo = await photo_service.create_photo(
         db=db,
         event_id=event.id,
         drive_file_id=drive_file["id"],
@@ -170,12 +176,12 @@ def upload_photo(
     "/{event_id}/photos",
     response_model=list[PhotoResponse],
 )
-def get_event_photos(
+async def get_event_photos(
     event_id: UUID,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    photos = photo_service.get_event_photos(
+    photos = await photo_service.get_event_photos(
         db=db,
         event_id=event_id,
         user_id=current_user.id,
@@ -191,16 +197,21 @@ def get_event_photos(
 
 
 @router.post("/{event_id}/scan")
-def photo_scan(
+async def photo_scan(
     event_id: UUID,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
-    event = event_service.get_user_event(
-            db=db,
-            event_id=event_id,
-            user_id=current_user.id,
-        )
+    """
+    Event admin can schedule face embedding in background. This will pass photo_id to Redis then the celery handles those,
+    which haven't processed yet. We use row locks so concurrent scan request wont make duplicate entries.
+    """
+
+    event = await event_service.get_user_event(
+        db=db,
+        event_id=event_id,
+        user_id=current_user.id,
+    )
     
     if event is None:
         raise HTTPException(
@@ -213,10 +224,40 @@ def photo_scan(
             status_code=403,
             detail="Only the event owner can scan",
         )
+    # End the transaction used for the event lookup.
+    await db.rollback()
+
+    # Start a new transaction for photo claiming.
+    async with db.begin():
+        photos = await photo_service.claim_pending_photos(
+            db=db,
+            event_id=event_id,
+            batch_size=100,
+        )
+
+        for photo in photos:
+            photo.processing_status = "PROCESSING"
+
+        photo_ids = [photo.id for photo in photos]
+
+    # Transaction has committed here, when it exits this block.
+    # Row locks have been released.
+
+    # Celery dispatch will go here next.
+    if photo_ids:
+        await run_in_threadpool(
+            process_photos.delay,   # this is a blocking sync operation ,that is why we are running in the threadpool
+            [str(photo_id) for photo_id in photo_ids]
+        )
+
+    return {
+        "event_id": str(event_id),
+        "photos_queued": len(photo_ids),
+        "photo_ids": [str(pid) for pid in photo_ids],
+    }
     
 
-
-@router.delete("/{event_id}",)
-def delete_event():
+@router.delete("/{event_id}")
+async def delete_event():
     pass
 

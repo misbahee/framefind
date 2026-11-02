@@ -1,15 +1,15 @@
 from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decode_access_token
 from app.dependencies.database import get_db
 from app.models.user import User
 
 
-def get_current_user(
+async def get_current_user(
     request: Request,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> User:
 
     credentials_exception = HTTPException(
@@ -32,7 +32,7 @@ def get_current_user(
     except JWTError:
         raise credentials_exception
 
-    user = db.get(User, user_id)
+    user = await db.get(User, user_id)
 
     if user is None:
         raise credentials_exception

@@ -1,22 +1,20 @@
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
 
 
 class UserService:
 
-    def get_or_create_google_user(
+    async def get_or_create_google_user(
         self,
-        db: Session,
+        db: AsyncSession,
         user_info: dict,
         credentials,
     ) -> User:
-        
+
         statement = select(User).where(User.google_user_id == user_info["google_user_id"])
-        user = (
-            db.scalar(statement)
-        )
+        user = await db.scalar(statement)
 
         if user is None:
             user = User(
@@ -42,8 +40,8 @@ class UserService:
             if credentials.refresh_token:
                 user.refresh_token = credentials.refresh_token
 
-        db.commit()
-        db.refresh(user)
+        await db.commit()
+        await db.refresh(user)
 
         return user
 

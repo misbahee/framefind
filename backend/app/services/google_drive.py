@@ -1,7 +1,9 @@
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from fastapi import UploadFile
-from googleapiclient.http import MediaIoBaseUpload
+from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+
+import io
 
 from app.core.config import settings
 
@@ -180,6 +182,32 @@ class GoogleDriveService:
             media_body=media,
             fields="id, name, mimeType, parents",
         ).execute()
+
+
+    def download_photo(self, user, drive_file_id: str) -> bytes:
+        """Download a photo from the user's Google Drive."""
+
+        drive = self.get_drive_service(user)
+
+        request = drive.files().get_media(
+            fileId=drive_file_id
+        )
+
+        file_buffer = io.BytesIO()
+
+        downloader = MediaIoBaseDownload(
+            file_buffer,
+            request,
+        )
+
+        done = False
+
+        while not done:
+            _, done = downloader.next_chunk()
+
+        return file_buffer.getvalue()
+
+    
 
 google_drive_service = GoogleDriveService()
 
