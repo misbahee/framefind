@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, status, HTTPException, UploadFile, File
+from PIL import UnidentifiedImageError
+import cv2
+from fastapi import APIRouter, Depends, Request, status, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 from uuid import UUID
@@ -12,8 +14,10 @@ from app.services.google_drive import google_drive_service
 from app.schemas.event_membership import EventJoinRequest
 from app.schemas.photo import PhotoResponse
 from app.services.photo import photo_service
-from app.tasks.photo_tasks import process_photos
-
+from app.tasks.photo_tasks import process_photo
+from app.services.image_decoder import decode_image
+from app.services.photo_search import search_similar_photos
+from app.core.config import settings
 
 router = APIRouter(
     prefix="/events",
@@ -245,15 +249,112 @@ async def photo_scan(
 
     # Celery dispatch will go here next.
     if photo_ids:
-        await run_in_threadpool(
-            process_photos.delay,   # this is a blocking sync operation ,that is why we are running in the threadpool
-            [str(photo_id) for photo_id in photo_ids]
-        )
+        for photo_id in photo_ids:
+            await run_in_threadpool(
+                process_photo.delay,
+                str(photo_id)
+                )
 
     return {
         "event_id": str(event_id),
         "photos_queued": len(photo_ids),
         "photo_ids": [str(pid) for pid in photo_ids],
+    }
+
+
+@router.post("/{event_id}/search")
+async def search_event_photos(
+    event_id: UUID,
+    request: Request,
+    selfie: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    get a photo from user, embed it returns the photos where that face has appeared.
+    """
+
+    # 1. Verify event access
+    event = await event_service.get_user_event(
+        db=db,
+        event_id=event_id,
+        user_id=current_user.id,
+    )
+
+    if event is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Event not found",
+        )
+    
+    MAX_SELFIE_SIZE = settings.MAX_SELFIE_SIZE
+    # 2. Read uploaded selfie
+    image_bytes = await selfie.read(MAX_SELFIE_SIZE + 1)
+
+    if not image_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded image is empty",
+        )
+
+    if len(image_bytes) > MAX_SELFIE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail="Selfie must be smaller than 10 MB",
+        )
+
+    # 3. Decode image using existing decoder
+    try:
+        rgb_image = decode_image(image_bytes)
+
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or unsupported image",
+        )
+
+    # 4. Convert RGB to BGR for InsightFace
+    bgr_image = cv2.cvtColor(
+        rgb_image,
+        cv2.COLOR_RGB2BGR,
+    )
+
+    # 5. Get FaceRecognitionService from FastAPI lifespan
+    face_recognition = request.app.state.face_recognition
+
+    # 6. Extract face embeddings
+    embeddings = await run_in_threadpool(
+        face_recognition.extract_embeddings,
+        bgr_image,
+    )
+
+    # 7. Validate detected faces
+    if len(embeddings) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No face detected in the uploaded selfie",
+        )
+
+    if len(embeddings) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Please upload a selfie containing only one face",
+        )
+
+    query_embedding = embeddings[0]
+
+    # 8. Search similar photos in PostgreSQL
+    matches = await search_similar_photos(
+        db=db,
+        event_id=event_id,
+        query_embedding=query_embedding,
+    )
+
+    # 9. Return results
+    return {
+        "event_id": str(event_id),
+        "total_matches": len(matches),
+        "matches": matches,
     }
     
 

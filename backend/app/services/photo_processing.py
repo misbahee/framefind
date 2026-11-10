@@ -2,7 +2,6 @@ from types import SimpleNamespace
 from sqlalchemy import delete
 from uuid import UUID
 import cv2
-import numpy as np
 
 from app.models.photo import Photo
 from app.core.database_sync import SessionLocal
@@ -15,7 +14,7 @@ from app.services.image_decoder import decode_image
 face_recognition = FaceRecognitionService()
 
 
-def _process_single_photo(photo_id: str):
+def process_single_photo(photo_id: str):
     photo_uuid = UUID(photo_id)
 
     # Phase 1: Retrieve the required data
@@ -98,22 +97,11 @@ def _process_single_photo(photo_id: str):
         db.commit()
 
 
-    def process_single_photo(photo_id: str):
-        try:
-            _process_single_photo(photo_id)
+def mark_photo_failed(photo_id: UUID):
+    with SessionLocal() as db:
+        photo = db.get(Photo, photo_id)
 
-        except Exception:
-            logger.exception(
-                "Photo processing failed: %s",
-                photo_id,
-            )
+        if photo:
+            photo.processing_status = 'FAILED'
 
-            try:
-                mark_photo_failed(UUID(photo_id))
-            except Exception:
-                logger.exception(
-                    "Could not update FAILED status for photo: %s",
-                    photo_id,
-                )
-
-            raise
+            db.commit()

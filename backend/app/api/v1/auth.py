@@ -21,7 +21,11 @@ router = APIRouter(
 
 
 @router.get("/google/login")
-def google_login():
+def google_login(request: Request):
+    print(f"\n[Login] User-Agent: {request.headers.get('user-agent')}")
+    print(f"[Login] Sec-Purpose / Purpose: {request.headers.get('sec-purpose')} / {request.headers.get('purpose')}")
+    print(f"[Login] Referer: {request.headers.get('referer')}")
+
     flow = google_oauth_service.create_flow()
 
     authorization_url, state = flow.authorization_url(
@@ -30,11 +34,10 @@ def google_login():
     )
 
     response = RedirectResponse(url=authorization_url)
-    response.delete_cookie("oauth_state")   # clear any stale state first
     response.set_cookie(
         key="oauth_state",
         value=state,
-        httponly=True,
+        httponly=False,
         secure=False,
         samesite="lax",
         max_age=300,
@@ -52,6 +55,10 @@ async def google_callback(
     db: AsyncSession = Depends(get_db),
 ):
     stored_state = request.cookies.get("oauth_state")
+
+    print(f"[OAuth] stored_state from cookie: {stored_state!r}")
+    print(f"[OAuth] state from Google:         {state!r}")
+    print(f"[OAuth] all cookies:               {dict(request.cookies)}")
 
     if not stored_state or stored_state != state:
         raise HTTPException(

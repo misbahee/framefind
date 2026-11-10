@@ -1,17 +1,22 @@
 from app.celery_app import celery_app
-from app.services.photo_processing import process_single_photo
+from app.services.photo_processing import process_single_photo, mark_photo_failed
 
+@celery_app.task(
+    bind=True,
+    max_retries=2,
+    name="app.tasks.photo_tasks.process_photo",
+)
+def process_photo(self, photo_id: str):
 
-@celery_app.task
-def process_photos(photo_ids: list[str]):
+    try:
+        process_single_photo(photo_id)
 
-    print(f"Received {len(photo_ids)} photos for processing")
+    except Exception as exc:
 
-    for photo_id in photo_ids:
-        try:
-            process_single_photo(photo_id)
+        if self.request.retries < self.max_retries:
+            raise self.retry(
+                exc=exc,
+                countdown=30 if self.request.retries == 0 else 120,
+            )
 
-        except Exception as exc:
-            print(f"Failed to process photo {photo_id}: {exc}")
-
-    print("Photo batch processing finished")
+        mark_photo_failed(photo_id)

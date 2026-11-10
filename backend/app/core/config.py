@@ -17,6 +17,9 @@ class Settings(BaseSettings):
 
     BROKER_URL: str
 
+    SIMILARITY_THRESHOLD: float
+    MAX_SELFIE_SIZE: int 
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",
