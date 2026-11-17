@@ -1,0 +1,66 @@
+Project FrameFind {
+  database_type: 'PostgreSQL'
+}
+
+Table users {
+  id uuid [pk, not null]
+  google_user_id varchar(255) [unique, not null]
+  email varchar(255) [unique, not null]
+  name varchar(255) [not null]
+  google_profile_photo text
+  access_token text
+  refresh_token text
+  token_expiry timestamptz
+  framefind_folder_id varchar(255)
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table events {
+  id uuid [pk, not null]
+  owner_id uuid [not null]
+  name varchar(255) [not null]
+  date date [not null]
+  location varchar(255)
+  description text
+  drive_folder_id varchar(255) [not null]
+  invitation_token varchar(255) [unique, not null]
+  status varchar(20) [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table event_memberships {
+  id uuid [pk, not null]
+  event_id uuid [not null]
+  user_id uuid [not null]
+  joined_at timestamptz [not null]
+
+  indexes {
+    (event_id, user_id) [unique, name: 'uq_event_membership']
+  }
+}
+
+Table photos {
+  id uuid [pk, not null]
+  event_id uuid [not null]
+  drive_file_id varchar(255) [not null]
+  filename varchar(255) [not null]
+  mime_type varchar(100) [not null]
+  processing_status varchar(20) [not null]
+  created_at timestamptz [not null]
+  updated_at timestamptz [not null]
+}
+
+Table face_embeddings {
+  id uuid [pk, not null]
+  photo_id uuid [not null]
+  embedding vector(512) [not null]
+  created_at timestamptz [not null]
+}
+
+Ref: users.id < events.owner_id
+Ref: users.id < event_memberships.user_id
+Ref: events.id < event_memberships.event_id
+Ref: events.id < photos.event_id
+Ref: photos.id < face_embeddings.photo_id
